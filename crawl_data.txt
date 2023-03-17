@@ -1,0 +1,167 @@
+from selenium import webdriver
+from webdriver_manager.chrome import ChromeDriverManager 
+
+from time import sleep
+import pyotp, datetime
+import pandas as pd
+
+import sys
+sys.path.append('D:\Y4A_PROJECT')
+from Support_Tool import query as query
+from Connection import  Connect_y4a_int as biiint
+from Connection import  Connect_y4abii_SC as biisc
+
+acc_info = {
+        'USA': {'url': r'https://xxxxxxxx.amazon.com/home/vc',
+                'email': 'it.xxx@xxxx.com',
+                'password': r'xxxxxxxxxxxxxxxxxxxxxxxx',
+                'path_cookies': r'G:\.shortcut-targets-by-id\158bWWRdElFR4opqA795U9JLmcHs3CXXR\DE_DATA\Cookies\cookies_usa.pkl',
+        'sc_key':'xxxxxxxxxxxxxxxxxx'},
+
+        'USA_ASC': {'url': r'https://xxxxxxxxxxxxxxxxxxxx_azclaims_dnav_xx#/',
+       'email': 'it.usa@yes4all.com',
+        'password': r'usa_y4a_xxxxxxxxxxxxxxxxxxxxxxxxxxx',
+        'path_cookies': r'D:\Y4A_ALL_MARKET\login_page\cookies_usa_asc.pkl',
+        'sc_key':'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'}
+    }
+
+def login(country):
+    url = acc_info[country]['url']
+    email = acc_info[country]['email']
+    password = acc_info[country]['password']
+    sc_key = acc_info[country]['sc_key']
+
+    driver = webdriver.Chrome(ChromeDriverManager().install())
+    driver.get(url)
+    sleep(5)
+
+    driver.find_element('name', 'email').send_keys(email)
+    sleep(1)
+    
+    driver.find_element('name', 'password').send_keys(password)
+    sleep(1)
+
+    driver.find_element('xpath', '//*[@id="authportal-main-section"]/div[2]/div/div/form/div/div/div/div[3]/div[2]/div/label/div/label/input').click()
+    driver.find_element('id', 'signInSubmit').click()
+    sleep(10)
+    
+    while True:
+        try:
+            # kiếm cái ô otp, clear nó
+            otp = driver.find_element('xpath', r'//*[@id="auth-mfa-otpcode"]')
+            otp.clear()
+
+            # Time-based One-Time Passwords
+            totp = pyotp.TOTP(sc_key)
+
+            # lấy value OTP
+            value = totp.now()
+
+            # kiểm tra phải OTP của hiện tại không
+            verify = totp.verify(value, datetime.datetime.now() + datetime.timedelta(seconds=15))
+
+            # cho otp vào rồi click enter
+            if verify:
+                otp.send_keys(value)
+                sleep(2)
+                otp.find_element('xpath', r'//*[@id="auth-signin-button"]').click()
+                print('xong!')
+                break
+            else:
+                print('Verify fail!')
+                sleep(5)
+    
+        except:
+            pass
+
+    sleep(5)
+    driver.get(url)
+    return driver
+
+def collect_detail_asc(row):
+    see_more = row.find_element('xpath', r'.//span[@class="a-expander-prompt"]')
+    mydict= {}
+    
+    order_id = row.find_element('xpath', r'.//div/div/a/div').text
+    claim_date = row.find_element('xpath', r'.//div/div[2]').text
+    status = row.find_element('xpath', r'.//div/div[3]/span').text
+
+    mydict['ORDER_ID']= order_id
+    mydict['CLAIM_DATE']= claim_date
+    mydict['CLAIM_STATUS']= status
+
+    see_more.click()
+
+    table = row.find_elements('xpath', r'.//table[@class="a-lineitem"]/tbody/tr')
+    while len(table)<7:
+        sleep(2)
+        table = row.find_elements('xpath', r'.//table[@class="a-lineitem"]/tbody/tr')
+        sleep(2)
+
+    for string in table:
+        txt = string.text.strip().split(':',1)
+        key = txt[0]
+        value = txt[-1].strip().replace('$','')
+        mydict[key] = value
+
+    try:
+        appeal_by = row.find_element('xpath', r'.//span[@class="a-size-mini a-color-tertiary a-text-bold"][2]').text.replace('Appeal By : ','')
+        mydict['APPEAL_BY']= appeal_by
+    except:
+        pass
+    try:
+        date_gra = row.find_element('xpath', r'.//div[@class="a-column a-span2"][2]').text.split('\n')[1]
+        mydict['DATE_GRANTED']= date_gra
+    except:
+        pass
+    
+
+    df=pd.DataFrame([mydict])
+
+    return df
+
+def get_asc_safe_tclaim():
+    driver = login('USA')
+    driver.get(r'https://sellercentral.amazon.com/safet-claims/ref%3Dxx_safet_dnav_xx?mons_sel_dir_mcid=amzn1.merchant.d.xxxxxxxxxxxxxxxxx&mons_sel_mkid=ATVPDKIKX0DER&mons_sel_dir_paid=amzn1.pa.d.xxxxxxxxxxxxxxx&ignore_selection_changed=true')
+    all_df = pd.DataFrame()
+    sleep(2)
+    #### chọn range last 90 days
+    try:
+        driver.find_element('xpath', r'//*[@id="date-filter-value-dropdown"]/span/span').click()
+        sleep(1)
+        driver.find_element('xpath', r'//*[@id="date-filter-value-dropdown_3"]').click()
+    except:
+        pass
+
+    sleep(10)
+
+
+    while True:
+        try:
+            rows = driver.find_elements('xpath', r'//*[@id="list-claims-tab-content-section"]/div')
+            for row in rows[1:-1]:
+                rs = collect_detail_asc(row)
+                all_df=all_df.append(rs,ignore_index=True)
+            try:
+                next_button = driver.find_element('xpath', r'//*[@class="nextButton"]')
+                driver.execute_script("arguments[0].click();", next_button)
+                sleep(5)
+            except:
+                break
+
+        except:
+            break
+    all_df = all_df[['ORDER_ID','CLAIM_DATE','CLAIM_STATUS','Product','Quantity','Claim Amount','Reimbursement Amount','SAFE-T Claim ID',
+                     'Reason','Description','Attachments','Order Date','Return request date','RMA ID','APPEAL_BY','DATE_GRANTED']]
+    new_name = ['ORDER_ID','CLAIM_DATE','CLAIM_STATUS','PRODUCT','QUANTITY','CLAIM_AMOUNT','REIMBURSEMENT_AMOUNT','SAFE_T_CLAIM_ID',
+                  'REASON','DESCRIPTION','ATTACHMENTS','ORDER_DATE','RETURN_REQUEST_DATE','RMA_ID','APPEAL_BY','DATE_GRANTED']
+    
+    all_df.columns = new_name
+
+    # return all_df
+    all_df['RUN_DATE']= datetime.datetime.now()
+    query.df_to_db(biiint,all_df,[],'Y4A_INT','Y4A_DWB_ASC_SAF_CLA',True)
+    query.df_to_db(biisc,all_df,[],'bi_main','ASC_SAFE_CLAIM',True)
+
+
+get_asc_safe_tclaim()
